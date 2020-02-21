@@ -21,16 +21,15 @@ class Discriminator(nn.Module):
 
         # print(s.shape)
         # s_x = s.unsqueeze(1)
-        # print(h_pl.shape, h_mi.shape, s_x.shape)
         # exit(0)
         # s_x = s[batch]
         # h_mi = h_mi.view(-1).expand_as(h_pl)
         # print(h_pl.shape, h_mi.shape, s_x.shape)
         # print(self.f_k)
-        s_x = s.expand_as(h_pl)
-        sc_1 = torch.squeeze(self.f_k(h_pl, s_x), 1)
-        s_x = s.expand_as(h_mi)
-        sc_2 = torch.squeeze(self.f_k(h_mi, s_x), 1)
+        s_x = s.expand_as(h_pl) # expands [1, f_dim] to [N_pl, f_dim]
+        sc_1 = torch.squeeze(self.f_k(h_pl, s_x), 1) # [N_pl, 1] squeezed [N_pl]
+        s_x = s.expand_as(h_mi) # expands [1, f_dim] to [N_mi, f_dim] 
+        sc_2 = torch.squeeze(self.f_k(h_mi, s_x), 1) # [N_mi, 1] squeezed [N_mi]
 
         if s_bias1 is not None:
             sc_1 += s_bias1

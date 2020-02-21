@@ -1,8 +1,10 @@
+import copy
 import itertools
 import numpy as np
 import scipy.sparse as sp
 import sklearn
 import torch
+import time
 import torch.nn as nn
 import torch_geometric
 from torch_geometric.datasets import Planetoid, PPI
@@ -18,11 +20,25 @@ def get_hyperparameters():
         "nb_epochs": 10000,
         "patience": 20,
         "lr": 0.001,
-        "l2_coef": 0.0,
-        "drop_prob": 0.0,
+        "l2_coef": 1*1e-5,
+        "drop_prob": 0.5,
         "hid_units": 512, # 256 for larger datasets
         "nonlinearity": 'prelu', # special name to separate parameters
     }
+
+def preprocess_embeddings(model, dataset):
+    loader = DataLoader(
+        dataset,
+        batch_size=20,
+        drop_last=False,
+        shuffle=False,
+        # num_workers=5
+    )
+    the_data = None
+    for l in loader:
+        the_data=l.to("cuda")
+    embeds, _ = model.embed(the_data.x, the_data.edge_index, None)
+    return embeds, the_data
 
 def process_transductive(dataset):
     dataset_str = dataset
@@ -193,6 +209,7 @@ def process_inductive(dataset):
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
     model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=1)
+    random_model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=1).cuda()
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
     if torch.cuda.is_available():
@@ -221,10 +238,10 @@ def process_inductive(dataset):
     best_t = 0
 
     for epoch in range(20):
-        break
         total_loss = 0
         batch_id = 0
-        for batch in tqdm(itertools.chain(loader_train, loader_val)):
+        model.train()
+        for batch in itertools.chain(loader_train, loader_val):
             optimiser.zero_grad()
             if torch.cuda.is_available:
                 batch = batch.to('cuda')
@@ -236,7 +253,9 @@ def process_inductive(dataset):
             idx = np.random.randint(0, len(dataset_train))
             while idx == batch_id:
                 idx = np.random.randint(0, len(dataset_train))
-            shuf_fts = torch.nn.functional.dropout(dataset_train[idx].x, 0.5)
+            # idx = np.random.permutation(nb_nodes)
+            # shuf_fts = features[idx, :]
+            shuf_fts = torch.nn.functional.dropout(dataset_train[idx].x, drop_prob)
             edge_index2 = dataset_train[idx].edge_index
 
             lbl_1 = torch.ones(nb_nodes)
@@ -245,7 +264,8 @@ def process_inductive(dataset):
 
             if torch.cuda.is_available():
                 shuf_fts = shuf_fts.cuda()
-                edge_index2 = edge_index2.cuda()
+                if edge_index2 is not None:
+                    edge_index2 = edge_index2.cuda()
                 lbl = lbl.cuda()
             
             logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
@@ -254,23 +274,68 @@ def process_inductive(dataset):
             loss = b_xent(logits, lbl)
             loss.backward()
             optimiser.step()
-            total_loss += loss.item()
             batch_id += 1
+            total_loss += loss.item()
 
-        print(epoch, 'Loss:', total_loss/(len(dataset_train)+len(dataset_val)))
 
-        if total_loss < best:
-            best = total_loss
-            best_t = epoch
-            cnt_wait = 0
-            torch.save(model.state_dict(), 'best_dgi_'+dataset+'.pkl')
+        print(epoch, 'Train Loss:', total_loss/(len(dataset_train)))
 
-    print('Loading {}th epoch'.format(best_t))
-    # model.load_state_dict(torch.load('best_dgi_'+dataset+'.pkl'))
+        # model.eval()
+        # total_loss = 0
+        # batch_id = 0
+        # for batch in loader_val:
+        #     if torch.cuda.is_available:
+        #         batch = batch.to('cuda')
+        #     nb_nodes = batch.x.shape[0]
+        #     features = batch.x
+        #     labels = batch.y
+        #     edge_index = batch.edge_index
+
+        #     idx = np.random.randint(0, len(dataset_val))
+        #     while idx == batch_id:
+        #         idx = np.random.randint(0, len(dataset_val))
+        #     # idx = np.random.permutation(nb_nodes)
+        #     # shuf_fts = features[idx, :]
+        #     shuf_fts = dataset_val[idx].x
+        #     edge_index2 = dataset_val[idx].edge_index
+
+        #     lbl_1 = torch.ones(nb_nodes)
+        #     lbl_2 = torch.zeros(shuf_fts.shape[0])
+        #     lbl = torch.cat((lbl_1, lbl_2), 0)
+
+        #     if torch.cuda.is_available():
+        #         shuf_fts = shuf_fts.cuda()
+        #         if edge_index2 is not None:
+        #             edge_index2 = edge_index2.cuda()
+        #         lbl = lbl.cuda()
+            
+        #     logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
+        #     # print(logits.shape, lbl.shape, lb)
+
+        #     loss = b_xent(logits, lbl)
+        #     total_loss += loss.item()
+        #     # loss.backward()
+        #     # optimiser.step()
+        #     batch_id += 1
+
+        # print(epoch, 'Loss:', total_loss/(len(dataset_val)))
+
+    torch.save(model.state_dict(), 'best_dgi_'+dataset+'.pkl')
+
+
+    print('Loading last epoch')
+    model.load_state_dict(torch.load('best_dgi_'+dataset+'.pkl'))
     model.eval()
 
 
     accs = []
+
+
+    b_xent_reg = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(2.25))
+    train_embs, whole_train_data = preprocess_embeddings(model, dataset_train)
+    val_embs, whole_val_data = preprocess_embeddings(model, dataset_val)
+    test_embs, whole_test_data = preprocess_embeddings(model, dataset_test)
+    print(torch.sum(whole_train_data.y), whole_train_data.y.shape)
 
     for _ in range(20):
         log = LogReg(hid_units, nb_classes)
@@ -278,35 +343,40 @@ def process_inductive(dataset):
         log.cuda()
 
         pat_steps = 0
-        for _ in tqdm(range(100)):
-            log.train()
-            for l in loader_train:
-                l.to('cuda')
-                embeds, _ = model.embed(l.x, l.edge_index, None)
-                opt.zero_grad()
+        best = 1e9
+        log.train()
+        for _ in range(1000):
+            opt.zero_grad()
 
-                logits = log(embeds)
-                loss = b_xent(logits, l.y)
-                
-                loss.backward()
-                # print(loss.item())
-                opt.step()
+            logits = log(train_embs)
+            loss = b_xent_reg(logits, whole_train_data.y)
+            
+            loss.backward()
+            opt.step()
 
-        tot = torch.zeros(1)
-        tot = tot.cuda()
-        for l in loader_test:
-            l.to('cuda')
-            test_embs, _ = model.embed(l.x, l.edge_index, None)
-            logits = log(test_embs)
-            preds = torch.sigmoid(logits) > 0.5
-            # acc = torch.sum(preds == l.y).float() / l.y.shape[0]
-            f1 = sklearn.metrics.f1_score(l.y.cpu(), preds.long().cpu(), average='micro')
-            print(f1)
-            tot += f1
-        accs.append(tot/len(dataset_test))
-        print('Average micro-averaged f1:', tot / len(dataset_test))
+            log.eval()
+            val_logits = log(val_embs) 
+            loss = b_xent_reg(val_logits, whole_val_data.y)
+            if loss.item() < best:
+                best = loss.item()
+                pat_steps = 0
+            # print(loss, best, pat_steps)
+            if pat_steps >= 5:
+                break
 
-    accs = torch.stack(accs)
+            pat_steps += 1
+
+
+        log.eval()
+        logits = log(test_embs)
+        preds = torch.sigmoid(logits) > 0.5
+        # acc = torch.sum(preds == l.y).float() / l.y.shape[0]
+        f1 = sklearn.metrics.f1_score(whole_test_data.y.cpu(), preds.long().cpu(), average='micro')
+        accs.append(float(f1))
+        print()
+        print('Micro-averaged f1:', f1)
+
+    accs = torch.tensor(accs)
     print(accs.mean())
     print(accs.std())
 
