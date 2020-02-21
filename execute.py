@@ -1,6 +1,7 @@
 import itertools
 import numpy as np
 import scipy.sparse as sp
+import sklearn
 import torch
 import torch.nn as nn
 import torch_geometric
@@ -13,7 +14,7 @@ from utils import process
 
 def get_hyperparameters():
     return {
-        "batch_size": 2,
+        "batch_size": 1, # Only possible setting
         "nb_epochs": 10000,
         "patience": 20,
         "lr": 0.001,
@@ -24,6 +25,7 @@ def get_hyperparameters():
     }
 
 def process_transductive(dataset):
+    dataset_str = dataset
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
                         dataset,
                         transform=torch_geometric.transforms.NormalizeFeatures())[0]
@@ -95,7 +97,7 @@ def process_transductive(dataset):
             best = loss
             best_t = epoch
             cnt_wait = 0
-            torch.save(model.state_dict(), 'best_dgi.pkl')
+            torch.save(model.state_dict(), 'best_dgi_'+dataset_str+'.pkl')
         else:
             cnt_wait += 1
 
@@ -107,7 +109,8 @@ def process_transductive(dataset):
         optimiser.step()
 
     print('Loading {}th epoch'.format(best_t))
-    model.load_state_dict(torch.load('best_dgi.pkl'))
+    model.load_state_dict(torch.load('best_dgi_'+dataset_str+'.pkl'))
+    model.eval()
 
     embeds, _ = model.embed(features, edge_index, None)
     train_embs = embeds[mask_train, :]
@@ -136,12 +139,14 @@ def process_transductive(dataset):
             opt.zero_grad()
 
             logits = log(train_embs)
-            loss = xent(logits, train_lbls)
+            loss = b_xent(logits, train_lbls)
             
             loss.backward()
             opt.step()
 
         logits = log(test_embs)
+        print(logits.shape)
+        exit(0)
         preds = torch.argmax(logits, dim=1)
         acc = torch.sum(preds == test_lbls).float() / test_lbls.shape[0]
         accs.append(acc * 100)
@@ -169,19 +174,25 @@ def process_inductive(dataset):
     dataset_train = PPI(
         "./geometric_datasets/"+dataset,
         split="train",
-        transform=torch_geometric.transforms.NormalizeFeatures()
+        transform=torch_geometric.transforms.NormalizeFeatures(),
     )
     print(dataset_train)
     dataset_val = PPI(
         "./geometric_datasets/"+dataset,
         split="val",
-        transform=torch_geometric.transforms.NormalizeFeatures()
+        transform=torch_geometric.transforms.NormalizeFeatures(),
     )
     print(dataset_val)
+    dataset_test = PPI(
+        "./geometric_datasets/"+dataset,
+        split="test",
+        transform=torch_geometric.transforms.NormalizeFeatures(),
+    )
+    print(dataset_test)
 
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=batch_size)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=1)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
     if torch.cuda.is_available():
@@ -191,23 +202,28 @@ def process_inductive(dataset):
     loader_train = DataLoader(
         dataset_train,
         batch_size=hyperparameters["batch_size"],
-        shuffle=True
+        shuffle=False
     )
     loader_val = DataLoader(
         dataset_val,
         batch_size=hyperparameters["batch_size"],
-        shuffle=True
+        shuffle=False
+    )
+    loader_test = DataLoader(
+        dataset_test,
+        batch_size=hyperparameters["batch_size"],
+        shuffle=False
     )
     model.train()
 
     b_xent = nn.BCEWithLogitsLoss()
-    xent = nn.CrossEntropyLoss()
-    cnt_wait = 0
     best = 1e9
     best_t = 0
 
     for epoch in range(20):
+        break
         total_loss = 0
+        batch_id = 0
         for batch in tqdm(itertools.chain(loader_train, loader_val)):
             optimiser.zero_grad()
             if torch.cuda.is_available:
@@ -217,13 +233,14 @@ def process_inductive(dataset):
             labels = batch.y
             edge_index = batch.edge_index
 
-            idx = np.random.permutation(nb_nodes)
             idx = np.random.randint(0, len(dataset_train))
-            shuf_fts = dataset_train[idx].x
+            while idx == batch_id:
+                idx = np.random.randint(0, len(dataset_train))
+            shuf_fts = torch.nn.functional.dropout(dataset_train[idx].x, 0.5)
             edge_index2 = dataset_train[idx].edge_index
 
             lbl_1 = torch.ones(nb_nodes)
-            lbl_2 = torch.zeros(nb_nodes)
+            lbl_2 = torch.zeros(shuf_fts.shape[0])
             lbl = torch.cat((lbl_1, lbl_2), 0)
 
             if torch.cuda.is_available():
@@ -232,27 +249,66 @@ def process_inductive(dataset):
                 lbl = lbl.cuda()
             
             logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
+            # print(logits.shape, lbl.shape, lb)
 
             loss = b_xent(logits, lbl)
             loss.backward()
             optimiser.step()
             total_loss += loss.item()
+            batch_id += 1
 
-        print('Loss:', total_loss)
+        print(epoch, 'Loss:', total_loss/(len(dataset_train)+len(dataset_val)))
 
         if total_loss < best:
             best = total_loss
             best_t = epoch
             cnt_wait = 0
-            torch.save(model.state_dict(), 'best_dgi.pkl')
-        else:
-            cnt_wait += 1
+            torch.save(model.state_dict(), 'best_dgi_'+dataset+'.pkl')
 
-        if cnt_wait == patience:
-            print('Early stopping!')
-            break
+    print('Loading {}th epoch'.format(best_t))
+    # model.load_state_dict(torch.load('best_dgi_'+dataset+'.pkl'))
+    model.eval()
 
-    exit(0)
+
+    accs = []
+
+    for _ in range(20):
+        log = LogReg(hid_units, nb_classes)
+        opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
+        log.cuda()
+
+        pat_steps = 0
+        for _ in tqdm(range(100)):
+            log.train()
+            for l in loader_train:
+                l.to('cuda')
+                embeds, _ = model.embed(l.x, l.edge_index, None)
+                opt.zero_grad()
+
+                logits = log(embeds)
+                loss = b_xent(logits, l.y)
+                
+                loss.backward()
+                # print(loss.item())
+                opt.step()
+
+        tot = torch.zeros(1)
+        tot = tot.cuda()
+        for l in loader_test:
+            l.to('cuda')
+            test_embs, _ = model.embed(l.x, l.edge_index, None)
+            logits = log(test_embs)
+            preds = torch.sigmoid(logits) > 0.5
+            # acc = torch.sum(preds == l.y).float() / l.y.shape[0]
+            f1 = sklearn.metrics.f1_score(l.y.cpu(), preds.long().cpu(), average='micro')
+            print(f1)
+            tot += f1
+        accs.append(tot/len(dataset_test))
+        print('Average micro-averaged f1:', tot / len(dataset_test))
+
+    accs = torch.stack(accs)
+    print(accs.mean())
+    print(accs.std())
 
 dataset = "PPI"
 if dataset in ("Pubmed", "Cora", "Citeseer"):

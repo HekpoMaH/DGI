@@ -19,11 +19,17 @@ class Discriminator(nn.Module):
         if batch is None:
             batch = torch.zeros(h_pl.shape[0], dtype=torch.long)
 
-        print(s.shape)
-        s_x = s[batch]
-        print(h_pl.shape, h_mi.shape, s_x.shape)
-        exit(0)
+        # print(s.shape)
+        # s_x = s.unsqueeze(1)
+        # print(h_pl.shape, h_mi.shape, s_x.shape)
+        # exit(0)
+        # s_x = s[batch]
+        # h_mi = h_mi.view(-1).expand_as(h_pl)
+        # print(h_pl.shape, h_mi.shape, s_x.shape)
+        # print(self.f_k)
+        s_x = s.expand_as(h_pl)
         sc_1 = torch.squeeze(self.f_k(h_pl, s_x), 1)
+        s_x = s.expand_as(h_mi)
         sc_2 = torch.squeeze(self.f_k(h_mi, s_x), 1)
 
         if s_bias1 is not None:

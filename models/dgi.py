@@ -30,7 +30,7 @@ class DGI(nn.Module):
 
         h_2 = self.gcn(seq2, edge_index if edge_index_alt is None else edge_index_alt)
         h_2 = self.act(h_2)
-        print(h_1.shape, h_2.shape)
+        # print(h_1.shape, h_2.shape)
 
         ret = self.disc(s, h_1, h_2, samp_bias1, samp_bias2, batch=batch)
         return ret
