@@ -7,11 +7,13 @@ import torch
 import time
 import torch.nn as nn
 import torch_geometric
+import torch_geometric.nn as nng
 from torch_geometric.datasets import Planetoid, PPI
 from torch_geometric.data import DataLoader
 from tqdm import tqdm
 
 from models import DGI, LogReg
+from layers.GAEEnc import GAEEnc, VGAEEnc
 from utils import process
 
 def get_hyperparameters():
@@ -22,7 +24,7 @@ def get_hyperparameters():
         "lr": 0.001,
         "l2_coef": 1*1e-5,
         "drop_prob": 0.5,
-        "hid_units": 512, # 256 for larger datasets
+        "hid_units": 512, # 256 for larger datasets, 512 for default, 
         "nonlinearity": 'prelu', # special name to separate parameters
     }
 
@@ -40,13 +42,7 @@ def preprocess_embeddings(model, dataset):
     embeds, _ = model.embed(the_data.x, the_data.edge_index, None)
     return embeds, the_data
 
-def process_transductive(dataset, gnn_type='GCNConv'):
-    dataset_str = dataset
-    dataset = Planetoid("./geometric_datasets"+'/'+dataset,
-                        dataset,
-                        transform=torch_geometric.transforms.NormalizeFeatures())[0]
-
-    # training params
+def train_transductive(dataset, dataset_str, edge_index, gnn_type):
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
@@ -61,12 +57,6 @@ def process_transductive(dataset, gnn_type='GCNConv'):
     ft_size = dataset.x.shape[1]
     nb_classes = torch.max(dataset.y).item()+1 # 0 based cnt
     features = dataset.x
-    labels = dataset.y
-    edge_index = dataset.edge_index
-
-    mask_train = dataset.train_mask
-    mask_val = dataset.val_mask
-    mask_test = dataset.test_mask
 
     model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
     print(model)
@@ -75,11 +65,7 @@ def process_transductive(dataset, gnn_type='GCNConv'):
     if torch.cuda.is_available():
         print('Using CUDA')
         features = features.cuda()
-        labels = labels.cuda()
         edge_index = edge_index.cuda()
-        mask_train = mask_train.cuda()
-        mask_val = mask_val.cuda()
-        mask_test = mask_test.cuda()
         model = model.cuda()
 
 
@@ -114,7 +100,7 @@ def process_transductive(dataset, gnn_type='GCNConv'):
             best = loss
             best_t = epoch
             cnt_wait = 0
-            torch.save(model.state_dict(), 'best_dgi_'+dataset_str+'.pkl')
+            torch.save(model.state_dict(), 'best_dgi_'+dataset_str+'_'+gnn_type+'.pkl')
         else:
             cnt_wait += 1
 
@@ -124,9 +110,57 @@ def process_transductive(dataset, gnn_type='GCNConv'):
 
         loss.backward()
         optimiser.step()
+    return best_t
 
+def process_transductive(dataset, gnn_type='GCNConv'):
+    dataset_str = dataset
+    dataset = Planetoid("./geometric_datasets"+'/'+dataset,
+                        dataset,
+                        transform=torch_geometric.transforms.NormalizeFeatures())[0]
+
+    # training params
+    batch_size = 1 # Transductive setting
+    hyperparameters = get_hyperparameters()
+    nb_epochs = hyperparameters["nb_epochs"]
+    patience = hyperparameters["patience"]
+    lr = hyperparameters["lr"]
+    xent = nn.CrossEntropyLoss()
+    l2_coef = hyperparameters["l2_coef"]
+    drop_prob = hyperparameters["drop_prob"]
+    hid_units = hyperparameters["hid_units"]
+    nonlinearity = hyperparameters["nonlinearity"]
+
+    nb_nodes = dataset.x.shape[0]
+    ft_size = dataset.x.shape[1]
+    nb_classes = torch.max(dataset.y).item()+1 # 0 based cnt
+    features = dataset.x
+    labels = dataset.y
+    edge_index = dataset.edge_index
+
+    mask_train = dataset.train_mask
+    mask_val = dataset.val_mask
+    mask_test = dataset.test_mask
+
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
+    print(model)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
+
+    if torch.cuda.is_available():
+        print('Using CUDA')
+        features = features.cuda()
+        labels = labels.cuda()
+        edge_index = edge_index.cuda()
+        mask_train = mask_train.cuda()
+        mask_val = mask_val.cuda()
+        mask_test = mask_test.cuda()
+        model = model.cuda()
+
+    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type)
+
+    xent = nn.CrossEntropyLoss()
     print('Loading {}th epoch'.format(best_t))
-    model.load_state_dict(torch.load('best_dgi_'+dataset_str+'.pkl'))
+    print(model, 'best_dgi_'+dataset_str+'_'+gnn_type+'.pkl')
+    model.load_state_dict(torch.load('best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'))
     model.eval()
 
     embeds, _ = model.embed(features, edge_index, None)
@@ -279,51 +313,10 @@ def process_inductive(dataset, gnn_type="GCNConv"):
 
         print(epoch, 'Train Loss:', total_loss/(len(dataset_train)))
 
-        # model.eval()
-        # total_loss = 0
-        # batch_id = 0
-        # for batch in loader_val:
-        #     if torch.cuda.is_available:
-        #         batch = batch.to('cuda')
-        #     nb_nodes = batch.x.shape[0]
-        #     features = batch.x
-        #     labels = batch.y
-        #     edge_index = batch.edge_index
-
-        #     idx = np.random.randint(0, len(dataset_val))
-        #     while idx == batch_id:
-        #         idx = np.random.randint(0, len(dataset_val))
-        #     # idx = np.random.permutation(nb_nodes)
-        #     # shuf_fts = features[idx, :]
-        #     shuf_fts = dataset_val[idx].x
-        #     edge_index2 = dataset_val[idx].edge_index
-
-        #     lbl_1 = torch.ones(nb_nodes)
-        #     lbl_2 = torch.zeros(shuf_fts.shape[0])
-        #     lbl = torch.cat((lbl_1, lbl_2), 0)
-
-        #     if torch.cuda.is_available():
-        #         shuf_fts = shuf_fts.cuda()
-        #         if edge_index2 is not None:
-        #             edge_index2 = edge_index2.cuda()
-        #         lbl = lbl.cuda()
-            
-        #     logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
-        #     # print(logits.shape, lbl.shape, lb)
-
-        #     loss = b_xent(logits, lbl)
-        #     total_loss += loss.item()
-        #     # loss.backward()
-        #     # optimiser.step()
-        #     batch_id += 1
-
-        # print(epoch, 'Loss:', total_loss/(len(dataset_val)))
-
-    torch.save(model.state_dict(), 'best_dgi_'+dataset+'.pkl')
-
+    torch.save(model.state_dict(), 'best_dgi_'+dataset+'_'+gnn_type+'.pkl')
 
     print('Loading last epoch')
-    model.load_state_dict(torch.load('best_dgi_'+dataset+'.pkl'))
+    model.load_state_dict(torch.load('best_dgi_'+dataset+'_'+gnn_type+'.pkl'))
     model.eval()
 
     accs = []
@@ -377,11 +370,71 @@ def process_inductive(dataset, gnn_type="GCNConv"):
     print(accs.mean())
     print(accs.std())
 
+def process_link_prediction(dataset, gnn_type="GCNConv"):
+
+    batch_size = 1 # Transductive setting
+    hyperparameters = get_hyperparameters()
+    nb_epochs = hyperparameters["nb_epochs"]
+    patience = hyperparameters["patience"]
+    lr = hyperparameters["lr"]
+    xent = nn.CrossEntropyLoss()
+    l2_coef = hyperparameters["l2_coef"]
+    drop_prob = hyperparameters["drop_prob"]
+    hid_units = hyperparameters["hid_units"]
+    nonlinearity = hyperparameters["nonlinearity"]
+
+    dataset_str = dataset
+    dataset = Planetoid("./geometric_datasets"+'/'+dataset,
+                        dataset,
+                        transform=torch_geometric.transforms.NormalizeFeatures())[0]
+    nb_nodes = dataset.x.shape[0]
+    ft_size = dataset.x.shape[1]
+    nb_classes = torch.max(dataset.y).item()+1 # 0 based cnt
+    features = dataset.x
+    labels = dataset.y
+
+    mask_train = dataset.train_mask
+    mask_val = dataset.val_mask
+    mask_test = dataset.test_mask
+
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
+    gae = nng.GAE(model)
+    gae_data = gae.split_edges(dataset)
+    edge_index = gae_data.train_pos_edge_index
+    print(model)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
+
+    if torch.cuda.is_available():
+        print('Using CUDA')
+        features = features.cuda()
+        labels = labels.cuda()
+        edge_index = edge_index.cuda()
+        mask_train = mask_train.cuda()
+        mask_val = mask_val.cuda()
+        mask_test = mask_test.cuda()
+        model = model.cuda()
+
+    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type)
+    print('Loading {}th epoch'.format(best_t))
+    model.load_state_dict(torch.load('best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'))
+    model.eval()
+    print(gae_data)
+    Z = gae.encode(features, None, edge_index, embed_gae=True)
+    print(gae.decode(Z, edge_index).shape)
+    print(gae.test(Z, gae_data.test_pos_edge_index.cuda(), gae_data.test_neg_edge_index.cuda()))
+
+
+    exit(0)
+
 dataset = "PPI"
-conv = "GATConv"
+conv = "SGCInductive"
+LinkPrediction = False # False/True value whether we want to test link prediction
 if dataset in ("Pubmed", "Cora", "Citeseer"):
-    process_transductive(dataset, conv)
+    if LinkPrediction:
+        process_link_prediction(dataset, conv)
+    else:
+        process_transductive(dataset, conv)
 elif dataset == "PPI":
-    process_inductive(dataset, conv) # conv one of {MeanPool, GATConv}
+    process_inductive(dataset, conv) # conv one of {MeanPool, GATConv, SGCInductive}
 else:
     print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")

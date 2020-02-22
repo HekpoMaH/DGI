@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch_geometric
-from layers import GCN, AvgReadout, Discriminator, GraphSkip
+from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive
 
 class GNNPlusAct(nn.Module):
     def __init__(self, n_in, n_h, activation, gnn_type='GCNConv'):
@@ -13,7 +13,9 @@ class GNNPlusAct(nn.Module):
         elif gnn_type == "GATConv":
             self.gnn = torch_geometric.nn.GATConv(n_in, n_h)
         elif gnn_type == "SGConv":
-            self.gnn = torch_geometric.nn.SGConv(n_in, n_h, K=3)
+            self.gnn = torch_geometric.nn.SGConv(n_in, n_h, K=1)
+        elif gnn_type == "SGCInductive":
+            self.gnn = SGCInductive.SGCInductive(n_in, n_h, K=1)
         else:
             print("UNKNOWN ARCHITECTURE")
             exit(0)
@@ -40,7 +42,10 @@ class DGI(nn.Module):
         self.disc = Discriminator(n_h, batch_size)
         # has reset parameters
 
-    def forward(self, seq1, seq2, edge_index, batch=None, samp_bias1=None, samp_bias2=None, edge_index_alt=None):
+    def forward(self, seq1, seq2, edge_index, batch=None, samp_bias1=None, samp_bias2=None, edge_index_alt=None, embed_gae=False):
+        if embed_gae:
+            return self.embed(seq1, edge_index, embed_gae=embed_gae)
+
         h_1 = self.gnn(seq1, edge_index)
         # h_1 = self.act(h_1)
 
@@ -55,12 +60,14 @@ class DGI(nn.Module):
         return ret
 
     # Detach the return variables
-    def embed(self, seq, edge_index, batch):
+    def embed(self, seq, edge_index, batch=None, embed_gae=False):
         h_1 = self.gnn(seq, edge_index)
         # h_1 = self.act(h_1)
         s = self.read(h_1, batch)
         s = self.sigm(s)
 
+        if embed_gae:
+            return h_1.detach()
         return h_1.detach(), s.detach()
 
 if __name__ == "__main__":
