@@ -4,18 +4,26 @@ import torch.nn as nn
 import torch_geometric
 from layers import GCN, AvgReadout, Discriminator, GraphSkip
 
+class GCNPlusAct(nn.Module):
+    def __init__(self, n_in, n_h, activation):
+        super(GCNPlusAct, self).__init__()
+        self.act = nn.PReLU() if activation == "prelu" else activation
+        self.gcn = torch_geometric.nn.GCNConv(n_in, n_h)
+        self.gcn.reset_parameters()
+    def forward(self, x, edge_index):
+        return self.act(self.gcn(x, edge_index))
+
+
 class DGI(nn.Module):
     def __init__(self, n_in, n_h, activation, update_rule="GCNConv", batch_size=1):
         super(DGI, self).__init__()
 
         if update_rule=="GCNConv":
-            self.act = nn.PReLU() if activation == "prelu" else activation
-            self.gcn = torch.nn.Sequential(torch_geometric.nn.GCNConv(n_in, n_h),
-                                           self.act)
-            self.gcn.reset_parameters()
+            self.gcn = GCNPlusAct(n_in, n_h, activation)
+            # has reset parameters and activation in constructor
         if update_rule=="MeanPool":
             self.gcn = GraphSkip.GraphSkip(n_in, n_h, activation)
-            # has reset parameters in its constructor
+            # has reset parameters and activation in constructor
 
         self.read = AvgReadout()
 

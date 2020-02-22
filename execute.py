@@ -69,7 +69,7 @@ def process_transductive(dataset):
     mask_test = dataset.test_mask
 
     model = DGI(ft_size, hid_units, nonlinearity)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
 
     if torch.cuda.is_available():
         print('Using CUDA')
@@ -155,14 +155,12 @@ def process_transductive(dataset):
             opt.zero_grad()
 
             logits = log(train_embs)
-            loss = b_xent(logits, train_lbls)
+            loss = xent(logits, train_lbls)
             
             loss.backward()
             opt.step()
 
         logits = log(test_embs)
-        print(logits.shape)
-        exit(0)
         preds = torch.argmax(logits, dim=1)
         acc = torch.sum(preds == test_lbls).float() / test_lbls.shape[0]
         accs.append(acc * 100)
@@ -380,7 +378,7 @@ def process_inductive(dataset):
     print(accs.mean())
     print(accs.std())
 
-dataset = "PPI"
+dataset = "Cora"
 if dataset in ("Pubmed", "Cora", "Citeseer"):
     process_transductive(dataset)
 elif dataset == "PPI":
