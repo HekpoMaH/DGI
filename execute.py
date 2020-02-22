@@ -207,7 +207,7 @@ def process_inductive(dataset, gnn_type="GCNConv"):
 
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=1)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, batch_size=1)
     print(model)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
@@ -326,9 +326,7 @@ def process_inductive(dataset, gnn_type="GCNConv"):
     model.load_state_dict(torch.load('best_dgi_'+dataset+'.pkl'))
     model.eval()
 
-
     accs = []
-
 
     b_xent_reg = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(2.25))
     train_embs, whole_train_data = preprocess_embeddings(model, dataset_train)
@@ -379,11 +377,11 @@ def process_inductive(dataset, gnn_type="GCNConv"):
     print(accs.mean())
     print(accs.std())
 
-dataset = "Cora"
-conv = "SGConv"
+dataset = "PPI"
+conv = "GATConv"
 if dataset in ("Pubmed", "Cora", "Citeseer"):
     process_transductive(dataset, conv)
 elif dataset == "PPI":
-    process_inductive(dataset, conv)
+    process_inductive(dataset, conv) # conv one of {MeanPool, GATConv}
 else:
     print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")
