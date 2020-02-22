@@ -40,7 +40,7 @@ def preprocess_embeddings(model, dataset):
     embeds, _ = model.embed(the_data.x, the_data.edge_index, None)
     return embeds, the_data
 
-def process_transductive(dataset):
+def process_transductive(dataset, gnn_type='GCNConv'):
     dataset_str = dataset
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
                         dataset,
@@ -68,7 +68,8 @@ def process_transductive(dataset):
     mask_val = dataset.val_mask
     mask_test = dataset.test_mask
 
-    model = DGI(ft_size, hid_units, nonlinearity)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
+    print(model)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
 
     if torch.cuda.is_available():
@@ -173,7 +174,7 @@ def process_transductive(dataset):
     print(accs.mean())
     print(accs.std())
 
-def process_inductive(dataset):
+def process_inductive(dataset, gnn_type="GCNConv"):
 
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
@@ -207,7 +208,7 @@ def process_inductive(dataset):
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
     model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=1)
-    random_model = DGI(ft_size, hid_units, nonlinearity, update_rule="MeanPool", batch_size=1).cuda()
+    print(model)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
     if torch.cuda.is_available():
@@ -379,9 +380,10 @@ def process_inductive(dataset):
     print(accs.std())
 
 dataset = "Cora"
+conv = "SGConv"
 if dataset in ("Pubmed", "Cora", "Citeseer"):
-    process_transductive(dataset)
+    process_transductive(dataset, conv)
 elif dataset == "PPI":
-    process_inductive(dataset)
+    process_inductive(dataset, conv)
 else:
     print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")
