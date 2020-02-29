@@ -15,7 +15,7 @@ class Discriminator(nn.Module):
             if m.bias is not None:
                 m.bias.data.fill_(0.0)
 
-    def forward(self, s, h_pl, h_mi, s_bias1=None, s_bias2=None, batch=None):
+    def forward(self, s, h_pl, h_mi, batch=None):
         if batch is None:
             batch = torch.zeros(h_pl.shape[0], dtype=torch.long)
 
@@ -30,11 +30,6 @@ class Discriminator(nn.Module):
         sc_1 = torch.squeeze(self.f_k(h_pl, s_x), 1) # [N_pl, 1] squeezed [N_pl]
         s_x = s.expand_as(h_mi) # expands [1, f_dim] to [N_mi, f_dim] 
         sc_2 = torch.squeeze(self.f_k(h_mi, s_x), 1) # [N_mi, 1] squeezed [N_mi]
-
-        if s_bias1 is not None:
-            sc_1 += s_bias1
-        if s_bias2 is not None:
-            sc_2 += s_bias2
 
         logits = torch.cat((sc_1, sc_2), 0)
         return logits

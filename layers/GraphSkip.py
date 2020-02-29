@@ -5,12 +5,7 @@ import torch_geometric
 class GraphSkip(nn.Module):
     def __init__(self, in_ft, out_ft, act, bias=True):
         super(GraphSkip, self).__init__()
-        self.fc_skip = nn.Linear(in_ft, out_ft, bias=False)
-        if bias:
-            self.bias = nn.Parameter(torch.FloatTensor(out_ft))
-            self.bias.data.fill_(0.0)
-        else:
-            self.register_parameter('bias', None)
+        self.fc_skip = nn.Linear(in_ft, out_ft, bias=bias)
         # That's equal to mean pooling -- check the docs
         self.mp1 = torch_geometric.nn.SAGEConv(in_ft, out_ft)
         self.mp1.reset_parameters()
