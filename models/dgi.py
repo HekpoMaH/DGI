@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch_geometric
 from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive
 
@@ -42,7 +43,7 @@ class DGI(nn.Module):
         self.disc = Discriminator(n_h, batch_size)
         # has reset parameters
 
-    def forward(self, seq1, seq2, edge_index, batch=None, samp_bias1=None, samp_bias2=None, edge_index_alt=None, embed_gae=False):
+    def forward(self, seq1, seq2, edge_index, batch=None, edge_index_alt=None, embed_gae=False):
         if embed_gae:
             return self.embed(seq1, edge_index, embed_gae=embed_gae)
 
@@ -56,16 +57,25 @@ class DGI(nn.Module):
         # h_2 = self.act(h_2)
         # print(h_1.shape, h_2.shape)
 
-        ret = self.disc(s, h_1, h_2, samp_bias1, samp_bias2, batch=batch)
+        ret = self.disc(s, h_1, h_2, batch=batch)
         return ret
 
     # Detach the return variables
-    def embed(self, seq, edge_index, batch=None, embed_gae=False):
+    def embed(self, seq, edge_index, batch=None, embed_gae=False, standardise=False):
+        def standardise_data(data):
+            means = data.mean(dim=1, keepdim=True)
+            stds = data.std(dim=1, keepdim=True)
+            data = (data - means)/stds
+            return data
         h_1 = self.gnn(seq, edge_index)
+
         # h_1 = self.act(h_1)
         s = self.read(h_1, batch)
         s = self.sigm(s)
 
+        if standardise:
+            h_1 = standardise_data(h_1)
+            s = standardise_data(s)
         if embed_gae:
             return h_1.detach()
         return h_1.detach(), s.detach()

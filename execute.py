@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from models import DGI, LogReg
 from layers.GAEEnc import GAEEnc, VGAEEnc
-from utils import process
+from utils import standardise
 from plot import plot_tsne
 
 
@@ -24,18 +24,28 @@ def get_hyperparameters():
         "nb_epochs": 10000,
         "patience": 20,
         "lr": 0.001,
-        "l2_coef": 1*1e-5,
+        "l2_coef": 1*1e-3,
         "drop_prob": 0.5,
         "hid_units": 512, # 256 for larger datasets, 512 for default, 
         "nonlinearity": 'prelu', # special name to separate parameters
     }
 
-def get_model_name(dataset_str, gnn_type, K):
+def get_model_name(dataset_str, gnn_type, K, random_init=False, link_prediction=False):
     assert gnn_type
-    if gnn_type == "SGConv" and K is not None:
-        model_name = 'best_dgi_'+dataset_str+'_'+gnn_type+"_"+str(K)+'.pkl'
+    if random_init:
+        prefix = 'random_'
     else:
-        model_name = 'best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'
+        prefix = 'best_'
+    if link_prediction:
+        prefix2 = 'link_prediction_'
+    else:
+        prefix2 = ''
+
+    if gnn_type == "SGConv" and K is not None:
+        model_name = 'dgi_'+dataset_str+'_'+gnn_type+"_"+str(K)+'.pkl'
+    else:
+        model_name = 'dgi_'+dataset_str+'_'+gnn_type+'.pkl'
+    model_name = prefix2 + prefix + model_name
     return model_name
 
 def preprocess_embeddings(model, dataset):
@@ -49,15 +59,31 @@ def preprocess_embeddings(model, dataset):
     the_data = None
     for l in loader:
         the_data=l.to("cuda")
-    embeds, _ = model.embed(the_data.x, the_data.edge_index, None)
+
+    loader = DataLoader(
+        dataset,
+        batch_size=2,
+        drop_last=False,
+        shuffle=False,
+        # num_workers=5
+    )
+    embeds = []
+    for l in loader:
+        l.to("cuda")
+        e, _ = model.embed(l.x, l.edge_index, None, standardise=True) 
+        embeds.append(e)
+    embeds = torch.cat(embeds, dim=0)
+
     return embeds, the_data
 
-def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=None):
+def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=None, random_init=False):
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
     patience = hyperparameters["patience"]
     lr = hyperparameters["lr"]
+    if gnn_type == "SGConv":
+        lr /= 2.
     hid_units = hyperparameters["hid_units"]
     nonlinearity = hyperparameters["nonlinearity"]
 
@@ -67,8 +93,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
     features = dataset.x
 
     model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
-    model_name = get_model_name(dataset_str, gnn_type, K)
-    print(model)
+    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
     if torch.cuda.is_available():
@@ -85,6 +110,8 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
     best_t = 0
 
     for epoch in range(nb_epochs):
+        if random_init:
+            break
         model.train()
         optimiser.zero_grad()
 
@@ -109,7 +136,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
             best = loss
             best_t = epoch
             cnt_wait = 0
-            torch.save(model.state_dict(), model_name)
+            torch.save(model.state_dict(), './trained_models/'+model_name)
         else:
             cnt_wait += 1
 
@@ -121,11 +148,12 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
         optimiser.step()
     return best_t
 
-def process_transductive(dataset, gnn_type='GCNConv', K=None):
+def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False):
     dataset_str = dataset
+    norm_features = torch_geometric.transforms.NormalizeFeatures()
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
                         dataset,
-                        transform=torch_geometric.transforms.NormalizeFeatures())[0]
+                        transform=norm_features)[0]
 
     # training params
     batch_size = 1 # Transductive setting
@@ -145,83 +173,98 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None):
     features = dataset.x
     labels = dataset.y
     edge_index = dataset.edge_index
+    edge_index, _ = torch_geometric.utils.add_remaining_self_loops(edge_index)
 
     mask_train = dataset.train_mask
     mask_val = dataset.val_mask
     mask_test = dataset.test_mask
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
-    print(model)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
-
-    if torch.cuda.is_available():
-        print('Using CUDA')
-        features = features.cuda()
-        labels = labels.cuda()
-        edge_index = edge_index.cuda()
-        mask_train = mask_train.cuda()
-        mask_val = mask_val.cuda()
-        mask_test = mask_test.cuda()
-        model = model.cuda()
-
-    model_name = get_model_name(dataset_str, gnn_type, K)
-    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=K)
-
-    xent = nn.CrossEntropyLoss()
-    print('Loading {}th epoch'.format(best_t))
-    print(model, model_name)
-    model.load_state_dict(torch.load(model_name))
-    model.eval()
-
-    embeds, _ = model.embed(features, edge_index, None)
-    # plot_tsne(embeds, labels, model_name)
-    train_embs = embeds[mask_train, :]
-    val_embs = embeds[mask_val, :]
-    test_embs = embeds[mask_test, :]
-
-    train_lbls = labels[mask_train]
-    val_lbls = labels[mask_val]
-    test_lbls = labels[mask_test]
-
-    tot = torch.zeros(1)
-    tot = tot.cuda()
-
-    accs = []
-
-    for _ in range(50):
-        log = LogReg(hid_units, nb_classes)
-        opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
-        log.cuda()
-
-        pat_steps = 0
-        best_acc = torch.zeros(1)
-        best_acc = best_acc.cuda()
-        for _ in range(100):
-            log.train()
-            opt.zero_grad()
-
-            logits = log(train_embs)
-            loss = xent(logits, train_lbls)
-            
-            loss.backward()
-            opt.step()
-
-        logits = log(test_embs)
-        preds = torch.argmax(logits, dim=1)
-        acc = torch.sum(preds == test_lbls).float() / test_lbls.shape[0]
-        accs.append(acc * 100)
-        print(acc)
-        tot += acc
-
-    print('Average accuracy:', tot / 50)
-
-    accs = torch.stack(accs)
+    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init)
     with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
-        f.writelines([str(accs.mean().item())+'\n', str(accs.std().item())])
-    print(accs.mean())
-    print(accs.std())
+        pass
 
-def process_inductive(dataset, gnn_type="GCNConv", K=None):
+    all_accs, all_stds = [], []
+    for i in range(20):
+        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
+        print(model, model_name)
+        optimiser = torch.optim.Adam(model.parameters(), lr=lr)
+
+        if torch.cuda.is_available():
+            print('Using CUDA')
+            features = features.cuda()
+            labels = labels.cuda()
+            edge_index = edge_index.cuda()
+            mask_train = mask_train.cuda()
+            mask_val = mask_val.cuda()
+            mask_test = mask_test.cuda()
+            model = model.cuda()
+
+        best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=K, random_init=random_init)
+
+        xent = nn.CrossEntropyLoss()
+        print('Loading {}th epoch'.format(best_t))
+        print(model, model_name)
+        if not random_init:
+            model.load_state_dict(torch.load('./trained_models/'+model_name))
+        model.eval()
+
+        embeds, _ = model.embed(features, edge_index, None, standardise=False)
+        # plot_tsne(embeds, labels, model_name)
+        train_embs = embeds[mask_train, :]
+        val_embs = embeds[mask_val, :]
+        test_embs = embeds[mask_test, :]
+
+        train_lbls = labels[mask_train]
+        val_lbls = labels[mask_val]
+        test_lbls = labels[mask_test]
+
+        tot = torch.zeros(1)
+        tot = tot.cuda()
+
+        accs = []
+
+        for _ in range(50):
+            log = LogReg(hid_units, nb_classes)
+            opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
+            log.cuda()
+
+            pat_steps = 0
+            best_acc = torch.zeros(1)
+            best_acc = best_acc.cuda()
+            for _ in range(150):
+                log.train()
+                opt.zero_grad()
+
+                logits = log(train_embs)
+                loss = xent(logits, train_lbls)
+                
+                loss.backward()
+                opt.step()
+
+            logits = log(test_embs)
+            preds = torch.argmax(logits, dim=1)
+            acc = torch.sum(preds == test_lbls).float() / test_lbls.shape[0]
+            accs.append(acc * 100)
+            print(acc)
+            tot += acc
+
+        print('Average accuracy:', tot / 50)
+
+        accs = torch.stack(accs)
+        print(accs.mean())
+        print(accs.std())
+        all_accs.append(accs.mean())
+        all_stds.append(accs.std())
+        
+    all_accs = torch.stack(all_accs, dim=0)
+    all_stds = torch.stack(all_stds, dim=0)
+    with open("./results/"+model_name[:-4]+"_results.txt", "a+") as f:
+        f.writelines([str(all_accs.mean().item())+'\n', str(all_stds.mean().item())+'\n'])
+
+    print(all_accs.mean())
+    print(all_stds.mean())
+
+def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False):
 
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
@@ -233,51 +276,57 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None):
     nonlinearity = hyperparameters["nonlinearity"]
     batch_size = hyperparameters["batch_size"]
 
+    norm_features = torch_geometric.transforms.NormalizeFeatures()
     dataset_train = PPI(
         "./geometric_datasets/"+dataset,
         split="train",
-        transform=torch_geometric.transforms.NormalizeFeatures(),
+        transform=norm_features,
     )
     print(dataset_train)
     dataset_val = PPI(
         "./geometric_datasets/"+dataset,
         split="val",
-        transform=torch_geometric.transforms.NormalizeFeatures(),
+        transform=norm_features,
     )
     print(dataset_val)
     dataset_test = PPI(
         "./geometric_datasets/"+dataset,
         split="test",
-        transform=torch_geometric.transforms.NormalizeFeatures(),
+        transform=norm_features,
     )
-    print(dataset_test)
+    data = []
+    for d in dataset_train:
+        data.append(d)
+    for d in dataset_val:
+        data.append(d)
 
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
+
+    loader_train = DataLoader(
+        data,
+        batch_size=hyperparameters["batch_size"],
+        shuffle=True,
+    )
+    # loader_val = DataLoader(
+    #     dataset_val,
+    #     batch_size=hyperparameters["batch_size"],
+    #     shuffle=False
+    # )
+    loader_test = DataLoader(
+        dataset_test,
+        batch_size=hyperparameters["batch_size"],
+        shuffle=False
+    )
+
     model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, batch_size=1, K=K)
-    model_name = get_model_name(dataset, gnn_type, K)
+    model_name = get_model_name(dataset, gnn_type, K, random_init=random_init)
     print(model)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
     if torch.cuda.is_available():
         print('Using CUDA')
         model = model.cuda()
-
-    loader_train = DataLoader(
-        dataset_train,
-        batch_size=hyperparameters["batch_size"],
-        shuffle=False
-    )
-    loader_val = DataLoader(
-        dataset_val,
-        batch_size=hyperparameters["batch_size"],
-        shuffle=False
-    )
-    loader_test = DataLoader(
-        dataset_test,
-        batch_size=hyperparameters["batch_size"],
-        shuffle=False
-    )
     model.train()
 
     b_xent = nn.BCEWithLogitsLoss()
@@ -285,10 +334,13 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None):
     best_t = 0
 
     for epoch in range(20):
+        if random_init:
+            break
         total_loss = 0
         batch_id = 0
         model.train()
-        for batch in itertools.chain(loader_train, loader_val):
+        loaded = list(loader_train)
+        for batch in loaded:
             optimiser.zero_grad()
             if torch.cuda.is_available:
                 batch = batch.to('cuda')
@@ -297,13 +349,13 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None):
             labels = batch.y
             edge_index = batch.edge_index
 
-            idx = np.random.randint(0, len(dataset_train))
+            idx = np.random.randint(0, len(data))
             while idx == batch_id:
-                idx = np.random.randint(0, len(dataset_train))
+                idx = np.random.randint(0, len(data))
             # idx = np.random.permutation(nb_nodes)
             # shuf_fts = features[idx, :]
-            shuf_fts = torch.nn.functional.dropout(dataset_train[idx].x, drop_prob)
-            edge_index2 = dataset_train[idx].edge_index
+            shuf_fts = torch.nn.functional.dropout(loaded[idx].x, drop_prob)
+            edge_index2 = loaded[idx].edge_index
 
             lbl_1 = torch.ones(nb_nodes)
             lbl_2 = torch.zeros(shuf_fts.shape[0])
@@ -327,11 +379,13 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None):
 
         print(epoch, 'Train Loss:', total_loss/(len(dataset_train)))
 
-    torch.save(model.state_dict(), model_name)
+    torch.save(model.state_dict(), './trained_models/'+model_name)
 
     print('Loading last epoch')
-    model.load_state_dict(torch.load(model_name))
+    if not random_init:
+        model.load_state_dict(torch.load('./trained_models/'+model_name))
     model.eval()
+    torch.cuda.empty_cache()
 
     accs = []
 
@@ -348,7 +402,7 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None):
         pat_steps = 0
         best = 1e9
         log.train()
-        for _ in range(1000):
+        for _ in range(200):
             opt.zero_grad()
 
             logits = log(train_embs)
@@ -394,7 +448,6 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
     patience = hyperparameters["patience"]
     lr = hyperparameters["lr"]
     xent = nn.CrossEntropyLoss()
-    l2_coef = hyperparameters["l2_coef"]
     drop_prob = hyperparameters["drop_prob"]
     hid_units = hyperparameters["hid_units"]
     nonlinearity = hyperparameters["nonlinearity"]
@@ -414,11 +467,12 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
     mask_test = dataset.test_mask
 
     model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
+    model_name = get_model_name(dataset_str, gnn_type, K)
     gae = nng.GAE(model)
     gae_data = gae.split_edges(dataset)
     edge_index = gae_data.train_pos_edge_index
     print(model)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
     if torch.cuda.is_available():
         print('Using CUDA')
@@ -442,16 +496,18 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
 
 
 if __name__ == "__main__":
-    dataset = "PPI"
-    conv = "MeanPool"
-    K = 1
+    dataset = "Citeseer"
+    conv = "SGConv"
+    K=1
+    ri = False
     LinkPrediction = False # False/True value whether we want to test link prediction
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
             process_link_prediction(dataset, conv, K)
         else:
-            process_transductive(dataset, conv, K)
+            for K in (1,2,3,4,8,16):
+                process_transductive(dataset, conv, K, random_init=ri)
     elif dataset == "PPI":
-        process_inductive(dataset, conv, K) # conv one of {MeanPool, GATConv, SGCInductive}
+        process_inductive(dataset, conv, K, random_init=ri) # conv one of {MeanPool, GATConv, SGCInductive}
     else:
         print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")
