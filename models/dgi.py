@@ -5,7 +5,7 @@ import torch_geometric
 from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive
 
 class GNNPlusAct(nn.Module):
-    def __init__(self, n_in, n_h, activation, gnn_type='GCNConv'):
+    def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None):
         super(GNNPlusAct, self).__init__()
         self.act = nn.PReLU() if activation == "prelu" else activation
         if gnn_type == "GCNConv":
@@ -13,9 +13,9 @@ class GNNPlusAct(nn.Module):
         elif gnn_type == "GATConv":
             self.gnn = torch_geometric.nn.GATConv(n_in, n_h)
         elif gnn_type == "SGConv":
-            self.gnn = torch_geometric.nn.SGConv(n_in, n_h, K=1)
+            self.gnn = torch_geometric.nn.SGConv(n_in, n_h, K=K)
         elif gnn_type == "SGCInductive":
-            self.gnn = SGCInductive.SGCInductive(n_in, n_h, K=1)
+            self.gnn = SGCInductive.SGCInductive(n_in, n_h, K=K)
         else:
             print("UNKNOWN ARCHITECTURE")
             exit(0)
@@ -25,14 +25,14 @@ class GNNPlusAct(nn.Module):
 
 
 class DGI(nn.Module):
-    def __init__(self, n_in, n_h, activation, update_rule="GCNConv", batch_size=1):
+    def __init__(self, n_in, n_h, activation, update_rule="GCNConv", batch_size=1, K=None):
         super(DGI, self).__init__()
 
         if update_rule=="MeanPool":
             self.gnn = GraphSkip.GraphSkip(n_in, n_h, activation)
             # has reset parameters and activation in constructor
         else:
-            self.gnn = GNNPlusAct(n_in, n_h, activation, update_rule)
+            self.gnn = GNNPlusAct(n_in, n_h, activation, update_rule, K=K)
             # has reset parameters and activation in constructor
 
         self.read = AvgReadout()

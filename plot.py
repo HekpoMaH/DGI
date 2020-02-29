@@ -14,4 +14,3 @@ def plot_tsne(data, labels, model_name):
     plt.savefig('./figures/'+model_name[:-4]+".png")
     plt.show()
 
-    print(embedded.shape, labels.shape)

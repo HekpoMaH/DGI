@@ -15,6 +15,8 @@ from tqdm import tqdm
 from models import DGI, LogReg
 from layers.GAEEnc import GAEEnc, VGAEEnc
 from utils import process
+from plot import plot_tsne
+
 
 def get_hyperparameters():
     return {
@@ -27,6 +29,14 @@ def get_hyperparameters():
         "hid_units": 512, # 256 for larger datasets, 512 for default, 
         "nonlinearity": 'prelu', # special name to separate parameters
     }
+
+def get_model_name(dataset_str, gnn_type, K):
+    assert gnn_type
+    if gnn_type == "SGConv" and K is not None:
+        model_name = 'best_dgi_'+dataset_str+'_'+gnn_type+"_"+str(K)+'.pkl'
+    else:
+        model_name = 'best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'
+    return model_name
 
 def preprocess_embeddings(model, dataset):
     loader = DataLoader(
@@ -42,14 +52,12 @@ def preprocess_embeddings(model, dataset):
     embeds, _ = model.embed(the_data.x, the_data.edge_index, None)
     return embeds, the_data
 
-def train_transductive(dataset, dataset_str, edge_index, gnn_type):
+def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=None):
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
     patience = hyperparameters["patience"]
     lr = hyperparameters["lr"]
-    l2_coef = hyperparameters["l2_coef"]
-    drop_prob = hyperparameters["drop_prob"]
     hid_units = hyperparameters["hid_units"]
     nonlinearity = hyperparameters["nonlinearity"]
 
@@ -58,9 +66,10 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type):
     nb_classes = torch.max(dataset.y).item()+1 # 0 based cnt
     features = dataset.x
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
+    model_name = get_model_name(dataset_str, gnn_type, K)
     print(model)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
     if torch.cuda.is_available():
         print('Using CUDA')
@@ -100,7 +109,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type):
             best = loss
             best_t = epoch
             cnt_wait = 0
-            torch.save(model.state_dict(), 'best_dgi_'+dataset_str+'_'+gnn_type+'.pkl')
+            torch.save(model.state_dict(), model_name)
         else:
             cnt_wait += 1
 
@@ -112,7 +121,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type):
         optimiser.step()
     return best_t
 
-def process_transductive(dataset, gnn_type='GCNConv'):
+def process_transductive(dataset, gnn_type='GCNConv', K=None):
     dataset_str = dataset
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
                         dataset,
@@ -141,7 +150,7 @@ def process_transductive(dataset, gnn_type='GCNConv'):
     mask_val = dataset.val_mask
     mask_test = dataset.test_mask
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
     print(model)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0*l2_coef)
 
@@ -155,15 +164,17 @@ def process_transductive(dataset, gnn_type='GCNConv'):
         mask_test = mask_test.cuda()
         model = model.cuda()
 
-    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type)
+    model_name = get_model_name(dataset_str, gnn_type, K)
+    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=K)
 
     xent = nn.CrossEntropyLoss()
     print('Loading {}th epoch'.format(best_t))
-    print(model, 'best_dgi_'+dataset_str+'_'+gnn_type+'.pkl')
-    model.load_state_dict(torch.load('best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'))
+    print(model, model_name)
+    model.load_state_dict(torch.load(model_name))
     model.eval()
 
     embeds, _ = model.embed(features, edge_index, None)
+    # plot_tsne(embeds, labels, model_name)
     train_embs = embeds[mask_train, :]
     val_embs = embeds[mask_val, :]
     test_embs = embeds[mask_test, :]
@@ -205,10 +216,12 @@ def process_transductive(dataset, gnn_type='GCNConv'):
     print('Average accuracy:', tot / 50)
 
     accs = torch.stack(accs)
+    with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
+        f.writelines([str(accs.mean().item())+'\n', str(accs.std().item())])
     print(accs.mean())
     print(accs.std())
 
-def process_inductive(dataset, gnn_type="GCNConv"):
+def process_inductive(dataset, gnn_type="GCNConv", K=None):
 
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
@@ -241,7 +254,8 @@ def process_inductive(dataset, gnn_type="GCNConv"):
 
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, batch_size=1)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, batch_size=1, K=K)
+    model_name = get_model_name(dataset, gnn_type, K)
     print(model)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
@@ -313,10 +327,10 @@ def process_inductive(dataset, gnn_type="GCNConv"):
 
         print(epoch, 'Train Loss:', total_loss/(len(dataset_train)))
 
-    torch.save(model.state_dict(), 'best_dgi_'+dataset+'_'+gnn_type+'.pkl')
+    torch.save(model.state_dict(), model_name)
 
     print('Loading last epoch')
-    model.load_state_dict(torch.load('best_dgi_'+dataset+'_'+gnn_type+'.pkl'))
+    model.load_state_dict(torch.load(model_name))
     model.eval()
 
     accs = []
@@ -325,7 +339,6 @@ def process_inductive(dataset, gnn_type="GCNConv"):
     train_embs, whole_train_data = preprocess_embeddings(model, dataset_train)
     val_embs, whole_val_data = preprocess_embeddings(model, dataset_val)
     test_embs, whole_test_data = preprocess_embeddings(model, dataset_test)
-    print(torch.sum(whole_train_data.y), whole_train_data.y.shape)
 
     for _ in range(20):
         log = LogReg(hid_units, nb_classes)
@@ -367,10 +380,13 @@ def process_inductive(dataset, gnn_type="GCNConv"):
         print('Micro-averaged f1:', f1)
 
     accs = torch.tensor(accs)
+
+    with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
+        f.writelines([str(accs.mean().item())+'\n', str(accs.std().item())])
     print(accs.mean())
     print(accs.std())
 
-def process_link_prediction(dataset, gnn_type="GCNConv"):
+def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
 
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
@@ -397,7 +413,7 @@ def process_link_prediction(dataset, gnn_type="GCNConv"):
     mask_val = dataset.val_mask
     mask_test = dataset.test_mask
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
     gae = nng.GAE(model)
     gae_data = gae.split_edges(dataset)
     edge_index = gae_data.train_pos_edge_index
@@ -424,17 +440,18 @@ def process_link_prediction(dataset, gnn_type="GCNConv"):
     print(gae.test(Z, gae_data.test_pos_edge_index.cuda(), gae_data.test_neg_edge_index.cuda()))
 
 
-    exit(0)
 
-dataset = "PPI"
-conv = "SGCInductive"
-LinkPrediction = False # False/True value whether we want to test link prediction
-if dataset in ("Pubmed", "Cora", "Citeseer"):
-    if LinkPrediction:
-        process_link_prediction(dataset, conv)
+if __name__ == "__main__":
+    dataset = "PPI"
+    conv = "MeanPool"
+    K = 1
+    LinkPrediction = False # False/True value whether we want to test link prediction
+    if dataset in ("Pubmed", "Cora", "Citeseer"):
+        if LinkPrediction:
+            process_link_prediction(dataset, conv, K)
+        else:
+            process_transductive(dataset, conv, K)
+    elif dataset == "PPI":
+        process_inductive(dataset, conv, K) # conv one of {MeanPool, GATConv, SGCInductive}
     else:
-        process_transductive(dataset, conv)
-elif dataset == "PPI":
-    process_inductive(dataset, conv) # conv one of {MeanPool, GATConv, SGCInductive}
-else:
-    print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")
+        print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")
