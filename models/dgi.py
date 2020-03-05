@@ -33,8 +33,8 @@ class DGI(nn.Module):
     def __init__(self, n_in, n_h, activation, update_rule="GCNConv", batch_size=1, K=None):
         super(DGI, self).__init__()
 
-        if update_rule=="MeanPool":
-            self.gnn = GraphSkip.GraphSkip(n_in, n_h, activation)
+        if "GraphSkip" in update_rule:
+            self.gnn = GraphSkip.GraphSkip(n_in, n_h, activation, convolution=update_rule, K=K)
             # has reset parameters and activation in constructor
         else:
             self.gnn = GNNPlusAct(n_in, n_h, activation, update_rule, K=K)
