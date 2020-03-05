@@ -184,7 +184,7 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False)
         pass
 
     all_accs, all_stds = [], []
-    for i in range(20):
+    for i in range(1): # change to how many runs you want
         model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
         print(model, model_name)
         optimiser = torch.optim.Adam(model.parameters(), lr=lr)
@@ -496,17 +496,17 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
 
 
 if __name__ == "__main__":
-    dataset = "Citeseer"
-    conv = "SGConv"
-    K=1
+    dataset = "Cora"
+    conv = "GATConvSum"
+    K=8
     ri = False
     LinkPrediction = False # False/True value whether we want to test link prediction
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
             process_link_prediction(dataset, conv, K)
         else:
-            for K in (1,2,3,4,8,16):
-                process_transductive(dataset, conv, K, random_init=ri)
+            # for K in (1,2,3,4,8,16):
+            process_transductive(dataset, conv, K, random_init=ri)
     elif dataset == "PPI":
         process_inductive(dataset, conv, K, random_init=ri) # conv one of {MeanPool, GATConv, SGCInductive}
     else:
