@@ -40,12 +40,12 @@ def get_model_name(dataset_str, gnn_type, K, random_init=False, link_prediction=
         prefix2 = 'link_prediction_'
     else:
         prefix2 = ''
+    suffix = '.pkl'
 
-    if gnn_type == "SGConv" and K is not None:
-        model_name = 'dgi_'+dataset_str+'_'+gnn_type+"_"+str(K)+'.pkl'
-    else:
-        model_name = 'dgi_'+dataset_str+'_'+gnn_type+'.pkl'
-    model_name = prefix2 + prefix + model_name
+    model_name = 'dgi_'+dataset_str+'_'+gnn_type
+    if K is not None:
+        model_name += '_'+str(K)
+    model_name = prefix2 + prefix + model_name+suffix
     return model_name
 
 def preprocess_embeddings(model, dataset):
@@ -496,7 +496,7 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
 
 
 if __name__ == "__main__":
-    dataset = "Cora"
+    dataset = "PPI"
     conv = "GATConvSum"
     K=8
     ri = False
