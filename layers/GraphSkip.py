@@ -14,11 +14,11 @@ class GraphSkip(nn.Module):
         elif "GATConvMean" in convolution:
             self.conv1 = torch_geometric.nn.GATConv(in_ft, out_ft, heads=extra_param, concat=False)
             self.conv2 = torch_geometric.nn.GATConv(out_ft, out_ft, heads=extra_param, concat=False)
-            self.conv3 = torch_geometric.nn.GATConv(out_ft, out_ft, heads=extra_param+2, concat=False)
+            self.conv3 = torch_geometric.nn.GATConv(out_ft, out_ft, heads=extra_param, concat=False)
         elif "GATConvSum" in convolution:
             self.conv1 = GATSum(in_ft, out_ft, heads=extra_param, concat=False)
             self.conv2 = GATSum(out_ft, out_ft, heads=extra_param, concat=False)
-            self.conv3 = GATSum(out_ft, out_ft, heads=extra_param+2, concat=False)
+            self.conv3 = GATSum(out_ft, out_ft, heads=extra_param, concat=False)
         elif "GATConv" in convolution:
             conv_class = torch_geometric.nn.GATConv
             self.conv1 = conv_class(in_ft, out_ft)

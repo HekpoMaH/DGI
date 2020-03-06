@@ -24,9 +24,9 @@ def get_hyperparameters():
         "nb_epochs": 10000,
         "patience": 20,
         "lr": 0.001,
-        "l2_coef": 1*1e-3,
+        "l2_coef": 0.0000, #1*1e-3,
         "drop_prob": 0.5,
-        "hid_units": 512, # 256 for larger datasets, 512 for default, 
+        "hid_units": 256, # 256 for larger datasets, 512 for default, 
         "nonlinearity": 'prelu', # special name to separate parameters
     }
 
@@ -43,7 +43,7 @@ def get_model_name(dataset_str, gnn_type, K, random_init=False, link_prediction=
     suffix = '.pkl'
 
     model_name = 'dgi_'+dataset_str+'_'+gnn_type
-    if K is not None:
+    if K is not None and "GCNConv" not in model_name:
         model_name += '_'+str(K)
     model_name = prefix2 + prefix + model_name+suffix
     return model_name
@@ -83,7 +83,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
     patience = hyperparameters["patience"]
     lr = hyperparameters["lr"]
     if gnn_type == "SGConv":
-        lr /= 2.
+        lr /= 3.
     hid_units = hyperparameters["hid_units"]
     nonlinearity = hyperparameters["nonlinearity"]
 
@@ -148,7 +148,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
         optimiser.step()
     return best_t
 
-def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False):
+def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=20):
     dataset_str = dataset
     norm_features = torch_geometric.transforms.NormalizeFeatures()
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
@@ -183,8 +183,9 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False)
     with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
         pass
 
-    all_accs, all_stds = [], []
-    for i in range(1): # change to how many runs you want
+    accs = []
+
+    for i in range(runs): # change to how many runs you want
         model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
         print(model, model_name)
         optimiser = torch.optim.Adam(model.parameters(), lr=lr)
@@ -221,8 +222,6 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False)
         tot = torch.zeros(1)
         tot = tot.cuda()
 
-        accs = []
-
         for _ in range(50):
             log = LogReg(hid_units, nb_classes)
             opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
@@ -249,20 +248,13 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False)
             tot += acc
 
         print('Average accuracy:', tot / 50)
-
-        accs = torch.stack(accs)
-        print(accs.mean())
-        print(accs.std())
-        all_accs.append(accs.mean())
-        all_stds.append(accs.std())
         
-    all_accs = torch.stack(all_accs, dim=0)
-    all_stds = torch.stack(all_stds, dim=0)
+    all_accs = torch.stack(accs, dim=0)
     with open("./results/"+model_name[:-4]+"_results.txt", "a+") as f:
-        f.writelines([str(all_accs.mean().item())+'\n', str(all_stds.mean().item())+'\n'])
+        f.writelines([str(all_accs.mean().item())+'\n', str(all_accs.std().item())+'\n'])
 
     print(all_accs.mean())
-    print(all_stds.mean())
+    print(all_accs.std())
 
 def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False):
 
@@ -496,17 +488,18 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
 
 
 if __name__ == "__main__":
-    dataset = "PPI"
-    conv = "GATConvSum"
+    dataset = "Pubmed"
+    conv = "SGConv"
     K=8
     ri = False
     LinkPrediction = False # False/True value whether we want to test link prediction
+    runs=10
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
             process_link_prediction(dataset, conv, K)
         else:
-            # for K in (1,2,3,4,8,16):
-            process_transductive(dataset, conv, K, random_init=ri)
+            for K in (2,3,4,6,8):
+                process_transductive(dataset, conv, K, random_init=ri, runs=runs)
     elif dataset == "PPI":
         process_inductive(dataset, conv, K, random_init=ri) # conv one of {MeanPool, GATConv, SGCInductive}
     else:

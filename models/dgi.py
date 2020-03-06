@@ -8,9 +8,10 @@ from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATS
 class GNNPlusAct(nn.Module):
     def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None):
         super(GNNPlusAct, self).__init__()
-        self.act = nn.PReLU() if activation == "prelu" else activation
         if "SGC" in gnn_type:
             self.act = lambda x: x
+        else:
+            self.act = nn.PReLU() if activation == "prelu" else activation
         if gnn_type == "GCNConv":
             self.gnn = torch_geometric.nn.GCNConv(n_in, n_h)
         elif gnn_type == "GATConv":
