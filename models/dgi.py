@@ -6,9 +6,9 @@ import torch_geometric
 from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATSum
 
 class GNNPlusAct(nn.Module):
-    def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None):
+    def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None, drop_sigma=False):
         super(GNNPlusAct, self).__init__()
-        if "SGC" in gnn_type:
+        if "SGC" in gnn_type and drop_sigma:
             self.act = lambda x: x
         else:
             self.act = nn.PReLU() if activation == "prelu" else activation
@@ -33,14 +33,14 @@ class GNNPlusAct(nn.Module):
 
 
 class DGI(nn.Module):
-    def __init__(self, n_in, n_h, activation, update_rule="GCNConv", batch_size=1, K=None):
+    def __init__(self, n_in, n_h, activation, update_rule="GCNConv", batch_size=1, K=None, drop_sigma=False):
         super(DGI, self).__init__()
 
         if "GraphSkip" in update_rule:
             self.gnn = GraphSkip.GraphSkip(n_in, n_h, activation, convolution=update_rule, K=K)
             # has reset parameters and activation in constructor
         else:
-            self.gnn = GNNPlusAct(n_in, n_h, activation, update_rule, K=K)
+            self.gnn = GNNPlusAct(n_in, n_h, activation, update_rule, K=K, drop_sigma=drop_sigma)
             # has reset parameters and activation in constructor
 
         self.read = AvgReadout()

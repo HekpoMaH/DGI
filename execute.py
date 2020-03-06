@@ -26,11 +26,11 @@ def get_hyperparameters():
         "lr": 0.001,
         "l2_coef": 0.0000, #1*1e-3,
         "drop_prob": 0.5,
-        "hid_units": 256, # 256 for larger datasets, 512 for default, 
+        "hid_units": 512, # 256 for larger datasets, 512 for default, 
         "nonlinearity": 'prelu', # special name to separate parameters
     }
 
-def get_model_name(dataset_str, gnn_type, K, random_init=False, link_prediction=False):
+def get_model_name(dataset_str, gnn_type, K, random_init=False, link_prediction=False, drop_sigma=False):
     assert gnn_type
     if random_init:
         prefix = 'random_'
@@ -45,6 +45,8 @@ def get_model_name(dataset_str, gnn_type, K, random_init=False, link_prediction=
     model_name = 'dgi_'+dataset_str+'_'+gnn_type
     if K is not None and "GCNConv" not in model_name:
         model_name += '_'+str(K)
+    if "SGC" in model_name and not drop_sigma:
+        model_name += '_uses_sigma'
     model_name = prefix2 + prefix + model_name+suffix
     return model_name
 
@@ -76,7 +78,7 @@ def preprocess_embeddings(model, dataset):
 
     return embeds, the_data
 
-def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=None, random_init=False):
+def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=None, random_init=False, drop_sigma=False):
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
@@ -93,7 +95,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
     features = dataset.x
 
     model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
-    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init)
+    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init, drop_sigma=drop_sigma)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
     if torch.cuda.is_available():
@@ -148,7 +150,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
         optimiser.step()
     return best_t
 
-def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=20):
+def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=20, drop_sigma=False):
     dataset_str = dataset
     norm_features = torch_geometric.transforms.NormalizeFeatures()
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
@@ -186,7 +188,7 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False,
     accs = []
 
     for i in range(runs): # change to how many runs you want
-        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
+        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K, drop_sigma=drop_sigma)
         print(model, model_name)
         optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -200,7 +202,7 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False,
             mask_test = mask_test.cuda()
             model = model.cuda()
 
-        best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=K, random_init=random_init)
+        best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K=K, random_init=random_init, drop_sigma=drop_sigma)
 
         xent = nn.CrossEntropyLoss()
         print('Loading {}th epoch'.format(best_t))
@@ -476,7 +478,7 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
         mask_test = mask_test.cuda()
         model = model.cuda()
 
-    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type)
+    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, drop_sigma=True)
     print('Loading {}th epoch'.format(best_t))
     model.load_state_dict(torch.load('best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'))
     model.eval()
@@ -488,18 +490,19 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
 
 
 if __name__ == "__main__":
-    dataset = "Pubmed"
+    dataset = "Cora"
     conv = "SGConv"
     K=8
     ri = False
     LinkPrediction = False # False/True value whether we want to test link prediction
     runs=10
+    drop_sigma=False
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
             process_link_prediction(dataset, conv, K)
         else:
             for K in (2,3,4,6,8):
-                process_transductive(dataset, conv, K, random_init=ri, runs=runs)
+                process_transductive(dataset, conv, K, random_init=ri, runs=runs, drop_sigma=drop_sigma)
     elif dataset == "PPI":
         process_inductive(dataset, conv, K, random_init=ri) # conv one of {MeanPool, GATConv, SGCInductive}
     else:
