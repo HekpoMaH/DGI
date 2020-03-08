@@ -8,16 +8,17 @@ from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATS
 class GNNPlusAct(nn.Module):
     def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None, drop_sigma=False):
         super(GNNPlusAct, self).__init__()
-        if "SGC" in gnn_type and drop_sigma:
-            self.act = lambda x: x
-        else:
+        self.gnn_type = gnn_type
+        self.drop_sigma = drop_sigma
+        
+        if not ("SGC" in gnn_type and drop_sigma):
             self.act = nn.PReLU() if activation == "prelu" else activation
         if gnn_type == "GCNConv":
             self.gnn = torch_geometric.nn.GCNConv(n_in, n_h)
         elif gnn_type == "GATConv":
             self.gnn = torch_geometric.nn.GATConv(n_in, n_h)
         elif gnn_type == "GATConvMean":
-            self.gnn = torch_geometric.nn.GATConv(n_in, n_h, heads=K, concat=False)
+            self.gnn = torch_geometric.nn.GATConv(n_in, n_h, heads=K, concat=True)
         elif gnn_type == "GATConvSum":
             self.gnn = GATSum(n_in, n_h, heads=K, concat=False)
         elif gnn_type == "SGConv":
@@ -29,7 +30,10 @@ class GNNPlusAct(nn.Module):
             exit(0)
         self.gnn.reset_parameters()
     def forward(self, x, edge_index):
-        return self.act(self.gnn(x, edge_index))
+        if not ("SGC" in self.gnn_type and self.drop_sigma):
+            return self.act(self.gnn(x, edge_index))
+        else:
+            return self.gnn(x, edge_index)
 
 
 class DGI(nn.Module):
@@ -37,6 +41,7 @@ class DGI(nn.Module):
         super(DGI, self).__init__()
 
         if "GraphSkip" in update_rule:
+            #FIXME add drop_sigma here
             self.gnn = GraphSkip.GraphSkip(n_in, n_h, activation, convolution=update_rule, K=K)
             # has reset parameters and activation in constructor
         else:

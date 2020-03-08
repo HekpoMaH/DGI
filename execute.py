@@ -26,7 +26,7 @@ def get_hyperparameters():
         "lr": 0.001,
         "l2_coef": 0.0000, #1*1e-3,
         "drop_prob": 0.5,
-        "hid_units": 512, # 256 for larger datasets, 512 for default, 
+        "hid_units": 512, # 256 for larger datasets/models, 512 for default, 
         "nonlinearity": 'prelu', # special name to separate parameters
     }
 
@@ -94,7 +94,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
     nb_classes = torch.max(dataset.y).item()+1 # 0 based cnt
     features = dataset.x
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
+    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K, drop_sigma=drop_sigma)
     model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init, drop_sigma=drop_sigma)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
@@ -181,15 +181,15 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False,
     mask_val = dataset.val_mask
     mask_test = dataset.test_mask
 
-    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init)
+    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init, drop_sigma=drop_sigma)
     with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
         pass
 
     accs = []
 
-    for i in range(runs): # change to how many runs you want
+    for i in range(runs): 
         model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K, drop_sigma=drop_sigma)
-        print(model, model_name)
+        print(model, model_name, drop_sigma)
         optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
         if torch.cuda.is_available():
@@ -258,7 +258,7 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False,
     print(all_accs.mean())
     print(all_accs.std())
 
-def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False):
+def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, runs=10):
 
     hyperparameters = get_hyperparameters()
     nb_epochs = hyperparameters["nb_epochs"]
@@ -296,6 +296,7 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False):
 
     ft_size = dataset_train[0].x.shape[1]
     nb_classes = dataset_train[0].y.shape[1] # multilabel
+    b_xent = nn.BCEWithLogitsLoss()
 
     loader_train = DataLoader(
         data,
@@ -313,128 +314,125 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False):
         shuffle=False
     )
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, batch_size=1, K=K)
-    model_name = get_model_name(dataset, gnn_type, K, random_init=random_init)
-    print(model)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
+    all_accs = []
+    for _ in range(runs):
+        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, batch_size=1, K=K)
+        model_name = get_model_name(dataset, gnn_type, K, random_init=random_init)
+        print(model)
+        optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=l2_coef)
 
-    if torch.cuda.is_available():
-        print('Using CUDA')
-        model = model.cuda()
-    model.train()
-
-    b_xent = nn.BCEWithLogitsLoss()
-    best = 1e9
-    best_t = 0
-
-    for epoch in range(20):
-        if random_init:
-            break
-        total_loss = 0
-        batch_id = 0
+        if torch.cuda.is_available():
+            print('Using CUDA')
+            model = model.cuda()
         model.train()
-        loaded = list(loader_train)
-        for batch in loaded:
-            optimiser.zero_grad()
-            if torch.cuda.is_available:
-                batch = batch.to('cuda')
-            nb_nodes = batch.x.shape[0]
-            features = batch.x
-            labels = batch.y
-            edge_index = batch.edge_index
 
-            idx = np.random.randint(0, len(data))
-            while idx == batch_id:
+        torch.cuda.empty_cache()
+        for epoch in range(1):
+            if random_init:
+                break
+            total_loss = 0
+            batch_id = 0
+            model.train()
+            loaded = list(loader_train)
+            for batch in loaded:
+                optimiser.zero_grad()
+                if torch.cuda.is_available:
+                    batch = batch.to('cuda')
+                nb_nodes = batch.x.shape[0]
+                features = batch.x
+                labels = batch.y
+                edge_index = batch.edge_index
+
                 idx = np.random.randint(0, len(data))
-            # idx = np.random.permutation(nb_nodes)
-            # shuf_fts = features[idx, :]
-            shuf_fts = torch.nn.functional.dropout(loaded[idx].x, drop_prob)
-            edge_index2 = loaded[idx].edge_index
+                while idx == batch_id:
+                    idx = np.random.randint(0, len(data))
+                # idx = np.random.permutation(nb_nodes)
+                # shuf_fts = features[idx, :]
+                shuf_fts = torch.nn.functional.dropout(loaded[idx].x, drop_prob)
+                edge_index2 = loaded[idx].edge_index
 
-            lbl_1 = torch.ones(nb_nodes)
-            lbl_2 = torch.zeros(shuf_fts.shape[0])
-            lbl = torch.cat((lbl_1, lbl_2), 0)
+                lbl_1 = torch.ones(nb_nodes)
+                lbl_2 = torch.zeros(shuf_fts.shape[0])
+                lbl = torch.cat((lbl_1, lbl_2), 0)
 
-            if torch.cuda.is_available():
-                shuf_fts = shuf_fts.cuda()
-                if edge_index2 is not None:
-                    edge_index2 = edge_index2.cuda()
-                lbl = lbl.cuda()
-            
-            logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
-            # print(logits.shape, lbl.shape, lb)
+                if torch.cuda.is_available():
+                    shuf_fts = shuf_fts.cuda()
+                    if edge_index2 is not None:
+                        edge_index2 = edge_index2.cuda()
+                    lbl = lbl.cuda()
+                
+                logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
+                # print(logits.shape, lbl.shape, lb)
 
-            loss = b_xent(logits, lbl)
-            loss.backward()
-            optimiser.step()
-            batch_id += 1
-            total_loss += loss.item()
+                loss = b_xent(logits, lbl)
+                loss.backward()
+                optimiser.step()
+                batch_id += 1
+                total_loss += loss.item()
 
 
-        print(epoch, 'Train Loss:', total_loss/(len(dataset_train)))
+            print(epoch, 'Train Loss:', total_loss/(len(dataset_train)))
 
-    torch.save(model.state_dict(), './trained_models/'+model_name)
+        torch.save(model.state_dict(), './trained_models/'+model_name)
+        torch.cuda.empty_cache()
 
-    print('Loading last epoch')
-    if not random_init:
-        model.load_state_dict(torch.load('./trained_models/'+model_name))
-    model.eval()
-    torch.cuda.empty_cache()
+        print('Loading last epoch')
+        if not random_init:
+            model.load_state_dict(torch.load('./trained_models/'+model_name))
+        model.eval()
 
-    accs = []
+        b_xent_reg = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(2.25))
+        train_embs, whole_train_data = preprocess_embeddings(model, dataset_train)
+        val_embs, whole_val_data = preprocess_embeddings(model, dataset_val)
+        test_embs, whole_test_data = preprocess_embeddings(model, dataset_test)
 
-    b_xent_reg = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(2.25))
-    train_embs, whole_train_data = preprocess_embeddings(model, dataset_train)
-    val_embs, whole_val_data = preprocess_embeddings(model, dataset_val)
-    test_embs, whole_test_data = preprocess_embeddings(model, dataset_test)
+        for _ in range(20):
+            log = LogReg(hid_units, nb_classes)
+            opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
+            log.cuda()
 
-    for _ in range(20):
-        log = LogReg(hid_units, nb_classes)
-        opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
-        log.cuda()
+            pat_steps = 0
+            best = 1e9
+            log.train()
+            for _ in range(250):
+                opt.zero_grad()
 
-        pat_steps = 0
-        best = 1e9
-        log.train()
-        for _ in range(200):
-            opt.zero_grad()
+                logits = log(train_embs)
+                loss = b_xent_reg(logits, whole_train_data.y)
+                
+                loss.backward()
+                opt.step()
 
-            logits = log(train_embs)
-            loss = b_xent_reg(logits, whole_train_data.y)
-            
-            loss.backward()
-            opt.step()
+                log.eval()
+                val_logits = log(val_embs) 
+                loss = b_xent_reg(val_logits, whole_val_data.y)
+                if loss.item() < best:
+                    best = loss.item()
+                    pat_steps = 0
+                # print(loss, best, pat_steps)
+                if pat_steps >= 5:
+                    break
+
+                pat_steps += 1
+
 
             log.eval()
-            val_logits = log(val_embs) 
-            loss = b_xent_reg(val_logits, whole_val_data.y)
-            if loss.item() < best:
-                best = loss.item()
-                pat_steps = 0
-            # print(loss, best, pat_steps)
-            if pat_steps >= 5:
-                break
+            logits = log(test_embs)
+            preds = torch.sigmoid(logits) > 0.5
+            # acc = torch.sum(preds == l.y).float() / l.y.shape[0]
+            f1 = sklearn.metrics.f1_score(whole_test_data.y.cpu(), preds.long().cpu(), average='micro')
+            all_accs.append(float(f1))
+            print()
+            print('Micro-averaged f1:', f1)
 
-            pat_steps += 1
-
-
-        log.eval()
-        logits = log(test_embs)
-        preds = torch.sigmoid(logits) > 0.5
-        # acc = torch.sum(preds == l.y).float() / l.y.shape[0]
-        f1 = sklearn.metrics.f1_score(whole_test_data.y.cpu(), preds.long().cpu(), average='micro')
-        accs.append(float(f1))
-        print()
-        print('Micro-averaged f1:', f1)
-
-    accs = torch.tensor(accs)
+    all_accs = torch.tensor(all_accs)
 
     with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
-        f.writelines([str(accs.mean().item())+'\n', str(accs.std().item())])
-    print(accs.mean())
-    print(accs.std())
+        f.writelines([str(all_accs.mean().item())+'\n', str(all_accs.std().item())])
+    print(all_accs.mean())
+    print(all_accs.std())
 
-def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
+def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=20):
 
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
@@ -460,50 +458,67 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None):
     mask_val = dataset.val_mask
     mask_test = dataset.test_mask
 
-    model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
-    model_name = get_model_name(dataset_str, gnn_type, K)
-    gae = nng.GAE(model)
-    gae_data = gae.split_edges(dataset)
-    edge_index = gae_data.train_pos_edge_index
-    print(model)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr)
+    all_auc, all_ap = [], []
 
-    if torch.cuda.is_available():
-        print('Using CUDA')
-        features = features.cuda()
-        labels = labels.cuda()
-        edge_index = edge_index.cuda()
-        mask_train = mask_train.cuda()
-        mask_val = mask_val.cuda()
-        mask_test = mask_test.cuda()
-        model = model.cuda()
+    for _ in range(runs):
+        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
+        model_name = get_model_name(dataset_str, gnn_type, K)
+        dataset = Planetoid("./geometric_datasets"+'/'+dataset_str,
+                            dataset_str,
+                            transform=torch_geometric.transforms.NormalizeFeatures())[0]
+        gae = nng.GAE(model)
+        gae_data = gae.split_edges(dataset)
+        edge_index = gae_data.train_pos_edge_index
+        optimiser = torch.optim.Adam(model.parameters(), lr=lr)
 
-    best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, drop_sigma=True)
-    print('Loading {}th epoch'.format(best_t))
-    model.load_state_dict(torch.load('best_dgi_'+dataset_str+'_'+gnn_type+'.pkl'))
-    model.eval()
-    print(gae_data)
-    Z = gae.encode(features, None, edge_index, embed_gae=True)
-    print(gae.decode(Z, edge_index).shape)
-    print(gae.test(Z, gae_data.test_pos_edge_index.cuda(), gae_data.test_neg_edge_index.cuda()))
+        if torch.cuda.is_available():
+            print('Using CUDA')
+            features = features.cuda()
+            labels = labels.cuda()
+            edge_index = edge_index.cuda()
+            mask_train = mask_train.cuda()
+            mask_val = mask_val.cuda()
+            mask_test = mask_test.cuda()
+            model = model.cuda()
+
+        best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, drop_sigma=True)
+        print('Loading {}th epoch'.format(best_t))
+        model.load_state_dict(torch.load('./trained_models/'+model_name))
+        model.eval()
+        Z = gae.encode(features, None, edge_index, embed_gae=True)
+        res = gae.test(Z, gae_data.test_pos_edge_index.cuda(), gae_data.test_neg_edge_index.cuda())
+        auc = res[0]
+        ap = res[1]
+        print(auc, ap)
+        all_auc.append(auc)
+        all_ap.append(ap)
+
+    all_auc = torch.tensor(all_auc)
+    all_ap = torch.tensor(all_ap)
+    with open("./results/"+model_name[:-4]+"_link_prediction_results.txt", "w") as f:
+        f.writelines([str(all_auc.mean().item())+'\n', str(all_auc.std().item())])
+        f.writelines([str(all_ap.mean().item())+'\n', str(all_ap.std().item())])
+
+    print(str(all_auc.mean().item()), str(all_auc.std().item()))
+    print(str(all_ap.mean().item()), str(all_ap.std().item()))
 
 
 
 if __name__ == "__main__":
     dataset = "Cora"
-    conv = "SGConv"
-    K=8
+    conv = "GCNConv"
+    K=4
     ri = False
-    LinkPrediction = False # False/True value whether we want to test link prediction
-    runs=10
-    drop_sigma=False
+    LinkPrediction = True # False/True value whether we want to test link prediction
+    runs = 5
+    drop_sigma = False
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
-            process_link_prediction(dataset, conv, K)
+            process_link_prediction(dataset, conv, K, runs=runs)
         else:
-            for K in (2,3,4,6,8):
-                process_transductive(dataset, conv, K, random_init=ri, runs=runs, drop_sigma=drop_sigma)
+            # for K in (2,3,4,6,8,16):
+            process_transductive(dataset, conv, K, random_init=ri, runs=runs, drop_sigma=drop_sigma)
     elif dataset == "PPI":
-        process_inductive(dataset, conv, K, random_init=ri) # conv one of {MeanPool, GATConv, SGCInductive}
+        process_inductive(dataset, conv, K, random_init=ri, runs=runs) # conv one of {MeanPool, GATConv, SGCInductive}
     else:
         print("Unsupported dataset. Try one of {Cora, Pubmed, Citeseer} or {PPI}")
