@@ -4,7 +4,7 @@ import torch_geometric.nn as nng
 import torch_geometric.utils as utilsg
 
 class SGCInductive(nng.MessagePassing):
-    def __init__(self, in_channels, out_channels, K=1, cached=False, bias=True):
+    def __init__(self, in_channels, out_channels, K=1, cached=False, bias=False):
         super(SGCInductive, self).__init__(aggr='mean')  # "Add" aggregation.
         self.in_channels = in_channels
         self.out_channels = out_channels

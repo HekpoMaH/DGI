@@ -95,11 +95,9 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
     features = dataset.x
 
     model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K, drop_sigma=drop_sigma)
-    model_name = get_model_name(dataset_str, gnn_type, K, random_init=random_init, drop_sigma=drop_sigma)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0)
 
     if torch.cuda.is_available():
-        print('Using CUDA')
         features = features.cuda()
         edge_index = edge_index.cuda()
         model = model.cuda()
@@ -150,7 +148,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
         optimiser.step()
     return best_t
 
-def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=20, drop_sigma=False):
+def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=10, drop_sigma=False):
     dataset_str = dataset
     norm_features = torch_geometric.transforms.NormalizeFeatures()
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
@@ -386,7 +384,7 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
         val_embs, whole_val_data = preprocess_embeddings(model, dataset_val)
         test_embs, whole_test_data = preprocess_embeddings(model, dataset_test)
 
-        for _ in range(20):
+        for _ in range(50):
             log = LogReg(hid_units, nb_classes)
             opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
             log.cuda()
@@ -432,7 +430,7 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
     print(all_accs.mean())
     print(all_accs.std())
 
-def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=20):
+def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=10, drop_sigma=False):
 
     batch_size = 1 # Transductive setting
     hyperparameters = get_hyperparameters()
@@ -461,8 +459,9 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=20):
     all_auc, all_ap = [], []
 
     for _ in range(runs):
-        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K)
-        model_name = get_model_name(dataset_str, gnn_type, K)
+        model = DGI(ft_size, hid_units, nonlinearity, update_rule=gnn_type, K=K, drop_sigma=drop_sigma)
+        print(model)
+        model_name = get_model_name(dataset_str, gnn_type, K, link_prediction=True, drop_sigma=drop_sigma)
         dataset = Planetoid("./geometric_datasets"+'/'+dataset_str,
                             dataset_str,
                             transform=torch_geometric.transforms.NormalizeFeatures())[0]
@@ -481,7 +480,7 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=20):
             mask_test = mask_test.cuda()
             model = model.cuda()
 
-        best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, drop_sigma=True)
+        best_t = train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, drop_sigma=drop_sigma, K=K)
         print('Loading {}th epoch'.format(best_t))
         model.load_state_dict(torch.load('./trained_models/'+model_name))
         model.eval()
@@ -495,8 +494,8 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=20):
 
     all_auc = torch.tensor(all_auc)
     all_ap = torch.tensor(all_ap)
-    with open("./results/"+model_name[:-4]+"_link_prediction_results.txt", "w") as f:
-        f.writelines([str(all_auc.mean().item())+'\n', str(all_auc.std().item())])
+    with open("./results/"+model_name[:-4]+"_results.txt", "w") as f:
+        f.writelines([str(all_auc.mean().item())+'\n', str(all_auc.std().item())+'\n'])
         f.writelines([str(all_ap.mean().item())+'\n', str(all_ap.std().item())])
 
     print(str(all_auc.mean().item()), str(all_auc.std().item()))
@@ -506,15 +505,15 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=20):
 
 if __name__ == "__main__":
     dataset = "Cora"
-    conv = "GCNConv"
-    K=4
+    conv = "SGConv"
+    K=2
     ri = False
-    LinkPrediction = True # False/True value whether we want to test link prediction
-    runs = 5
+    LinkPrediction = False # False/True value whether we want to test link prediction
+    runs = 10
     drop_sigma = False
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
-            process_link_prediction(dataset, conv, K, runs=runs)
+            process_link_prediction(dataset, conv, K, runs=runs, drop_sigma=drop_sigma)
         else:
             # for K in (2,3,4,6,8,16):
             process_transductive(dataset, conv, K, random_init=ri, runs=runs, drop_sigma=drop_sigma)

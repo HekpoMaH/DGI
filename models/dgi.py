@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric
-from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATSum
+from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATSum, SGC
 
 class GNNPlusAct(nn.Module):
     def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None, drop_sigma=False):
@@ -13,6 +13,7 @@ class GNNPlusAct(nn.Module):
         
         if not ("SGC" in gnn_type and drop_sigma):
             self.act = nn.PReLU() if activation == "prelu" else activation
+
         if gnn_type == "GCNConv":
             self.gnn = torch_geometric.nn.GCNConv(n_in, n_h)
         elif gnn_type == "GATConv":
@@ -22,7 +23,7 @@ class GNNPlusAct(nn.Module):
         elif gnn_type == "GATConvSum":
             self.gnn = GATSum(n_in, n_h, heads=K, concat=False)
         elif gnn_type == "SGConv":
-            self.gnn = torch_geometric.nn.SGConv(n_in, n_h, K=K)
+            self.gnn = torch_geometric.nn.SGConv(n_in, n_h, K=K, bias=False)
         elif gnn_type == "SGCInductive":
             self.gnn = SGCInductive.SGCInductive(n_in, n_h, K=K)
         else:
@@ -41,7 +42,6 @@ class DGI(nn.Module):
         super(DGI, self).__init__()
 
         if "GraphSkip" in update_rule:
-            #FIXME add drop_sigma here
             self.gnn = GraphSkip.GraphSkip(n_in, n_h, activation, convolution=update_rule, K=K)
             # has reset parameters and activation in constructor
         else:
