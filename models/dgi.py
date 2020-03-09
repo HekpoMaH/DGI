@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric
-from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATSum, SGC
+from layers import GCN, AvgReadout, Discriminator, GraphSkip, SGCInductive, GATSum
 
 class GNNPlusAct(nn.Module):
     def __init__(self, n_in, n_h, activation, gnn_type='GCNConv', K=None, drop_sigma=False):
