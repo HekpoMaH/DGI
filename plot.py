@@ -1,4 +1,5 @@
 from sklearn.manifold import TSNE
+from sklearn.metrics import silhouette_score
 import matplotlib.pyplot as plt
 import matplotlib
 import seaborn as sns
@@ -13,4 +14,5 @@ def plot_tsne(data, labels, model_name):
     #                         to remove .pkl
     plt.savefig('./figures/'+model_name[:-4]+".png")
     plt.show()
+    print(silhouette_score(embedded, labels))
 

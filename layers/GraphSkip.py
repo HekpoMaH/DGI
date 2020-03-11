@@ -39,7 +39,6 @@ class GraphSkip(nn.Module):
         self.build_convolutions(in_ft, out_ft, convolution, extra_param=K)
 
         self.act = nn.PReLU() if act == 'prelu' else act
-        
 
         for m in self.modules():
             self.weights_init(m)

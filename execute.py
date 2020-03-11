@@ -56,7 +56,6 @@ def preprocess_embeddings(model, dataset):
         batch_size=20,
         drop_last=False,
         shuffle=False,
-        # num_workers=5
     )
     the_data = None
     for l in loader:
@@ -67,7 +66,6 @@ def preprocess_embeddings(model, dataset):
         batch_size=2,
         drop_last=False,
         shuffle=False,
-        # num_workers=5
     )
     embeds = []
     for l in loader:
@@ -148,7 +146,7 @@ def train_transductive(dataset, dataset_str, edge_index, gnn_type, model_name, K
         optimiser.step()
     return best_t
 
-def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=10, drop_sigma=False):
+def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False, runs=10, drop_sigma=False, just_plot=False):
     dataset_str = dataset
     norm_features = torch_geometric.transforms.NormalizeFeatures()
     dataset = Planetoid("./geometric_datasets"+'/'+dataset,
@@ -210,7 +208,9 @@ def process_transductive(dataset, gnn_type='GCNConv', K=None, random_init=False,
         model.eval()
 
         embeds, _ = model.embed(features, edge_index, None, standardise=False)
-        # plot_tsne(embeds, labels, model_name)
+        if just_plot:
+            plot_tsne(embeds, labels, model_name)
+            exit(0)
         train_embs = embeds[mask_train, :]
         val_embs = embeds[mask_val, :]
         test_embs = embeds[mask_test, :]
@@ -301,11 +301,6 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
         batch_size=hyperparameters["batch_size"],
         shuffle=True,
     )
-    # loader_val = DataLoader(
-    #     dataset_val,
-    #     batch_size=hyperparameters["batch_size"],
-    #     shuffle=False
-    # )
     loader_test = DataLoader(
         dataset_test,
         batch_size=hyperparameters["batch_size"],
@@ -325,7 +320,7 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
         model.train()
 
         torch.cuda.empty_cache()
-        for epoch in range(1):
+        for epoch in range(20):
             if random_init:
                 break
             total_loss = 0
@@ -344,8 +339,6 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
                 idx = np.random.randint(0, len(data))
                 while idx == batch_id:
                     idx = np.random.randint(0, len(data))
-                # idx = np.random.permutation(nb_nodes)
-                # shuf_fts = features[idx, :]
                 shuf_fts = torch.nn.functional.dropout(loaded[idx].x, drop_prob)
                 edge_index2 = loaded[idx].edge_index
 
@@ -360,7 +353,6 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
                     lbl = lbl.cuda()
                 
                 logits = model(features, shuf_fts, edge_index, batch=batch.batch, edge_index_alt=edge_index2)
-                # print(logits.shape, lbl.shape, lb)
 
                 loss = b_xent(logits, lbl)
                 loss.backward()
@@ -407,7 +399,6 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
                 if loss.item() < best:
                     best = loss.item()
                     pat_steps = 0
-                # print(loss, best, pat_steps)
                 if pat_steps >= 5:
                     break
 
@@ -417,7 +408,6 @@ def process_inductive(dataset, gnn_type="GCNConv", K=None, random_init=False, ru
             log.eval()
             logits = log(test_embs)
             preds = torch.sigmoid(logits) > 0.5
-            # acc = torch.sum(preds == l.y).float() / l.y.shape[0]
             f1 = sklearn.metrics.f1_score(whole_test_data.y.cpu(), preds.long().cpu(), average='micro')
             all_accs.append(float(f1))
             print()
@@ -504,19 +494,19 @@ def process_link_prediction(dataset, gnn_type="GCNConv", K=None, runs=10, drop_s
 
 
 if __name__ == "__main__":
-    dataset = "Cora"
-    conv = "SGConv"
-    K=2
-    ri = False
+    dataset = "PPI"
+    conv = "GraphSkip" # {GCNConv, GATConvSum, SGConv} for transductive; {GraphSkip, GraphSkipGATConvSum, GraphSkipSGCInductive}
+    K=2 # Extra hyperparameter. Overloaded meaning: For SGC controls the depth, for GAT - number of heads. Ignored for GCN
+    ri = False # Random init or not
+    drop_sigma = True # Used with SGC, ignored otherwise (controls whether to remove any nonlinearities or preserve the LAST one)
     LinkPrediction = False # False/True value whether we want to test link prediction
-    runs = 10
-    drop_sigma = False
+    runs = 10 # how many runs
+    just_plot = False # If true, and a transductive dataset used, it will just train once, plot the embedding, calculate the Silhouette score and exit
     if dataset in ("Pubmed", "Cora", "Citeseer"):
         if LinkPrediction:
             process_link_prediction(dataset, conv, K, runs=runs, drop_sigma=drop_sigma)
         else:
-            # for K in (2,3,4,6,8,16):
-            process_transductive(dataset, conv, K, random_init=ri, runs=runs, drop_sigma=drop_sigma)
+            process_transductive(dataset, conv, K, random_init=ri, runs=runs, drop_sigma=drop_sigma, just_plot=just_plot)
     elif dataset == "PPI":
         process_inductive(dataset, conv, K, random_init=ri, runs=runs) # conv one of {MeanPool, GATConv, SGCInductive}
     else:
